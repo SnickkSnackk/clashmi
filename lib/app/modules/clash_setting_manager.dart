@@ -516,9 +516,14 @@ class ClashSettingManager {
         }
       }
     }
-    _setting.Extension?.AppendRules = appendRules;
+    final guardRules = _perAppLeakGuardRules();
+    final allAppendRules = [...guardRules, ...?appendRules];
+    _setting.Extension?.AppendRules = allAppendRules.isEmpty
+        ? null
+        : allAppendRules;
     if (overwrite) {
       final map = _setting.toJson();
+      _applyPerAppLeakGuardFindProcessMode(map, guardRules);
       MapHelper.removeNullOrEmpty(map, true, true);
 
       const JsonEncoder encoder = JsonEncoder.withIndent('  ');
@@ -531,10 +536,58 @@ class ClashSettingManager {
   static String getPatchFinalContent() {
     final setting = defaultConfigNoOverwrite();
     final map = setting.toJson();
+    _applyPerAppLeakGuardFindProcessMode(map, _perAppLeakGuardRules());
     MapHelper.removeNullOrEmpty(map, true, true);
     const JsonEncoder encoder = JsonEncoder.withIndent('  ');
     String content = encoder.convert(map);
     return content;
+  }
+
+  // An app excluded from the VPN can still bind its socket to the tun
+  // interface (SO_BINDTODEVICE) and its traffic ends up in the tunnel.
+  // Android routing does not prevent that, so reject TUN connections whose
+  // owner is not allowed by the per-app settings. The owner lookup returns
+  // nothing for apps the VPN does not apply to, so an unknown owner is
+  // rejected as well.
+  static List<String> _perAppLeakGuardRules() {
+    if (!Platform.isAndroid) {
+      return [];
+    }
+    final perApp = _setting.Extension?.Tun.perApp;
+    if (perApp == null || perApp.Enable != true) {
+      return [];
+    }
+    final packageIds = (perApp.PackageIds ?? [])
+        .where((id) => id.isNotEmpty && id != AppUtils.getId())
+        .toSet()
+        .toList();
+    if (packageIds.isEmpty) {
+      return [];
+    }
+    final matchers = packageIds.map((id) => "(PROCESS-NAME,$id)").toList();
+    final anyPackage = matchers.length == 1
+        ? matchers.first
+        : "(OR,(${matchers.join(",")}))";
+    if (perApp.WhiteList == true) {
+      return ["AND,((IN-TYPE,TUN),(NOT,($anyPackage))),REJECT"];
+    }
+    return [
+      "AND,((IN-TYPE,TUN),$anyPackage),REJECT",
+      "AND,((IN-TYPE,TUN),(NOT,((PROCESS-NAME-REGEX,.+)))),REJECT",
+    ];
+  }
+
+  static void _applyPerAppLeakGuardFindProcessMode(
+    Map<String, dynamic> map,
+    List<String> guardRules,
+  ) {
+    if (guardRules.isEmpty) {
+      return;
+    }
+    final mode = map['find-process-mode'];
+    if (mode == null || mode == ClashFindProcessMode.off.name) {
+      map['find-process-mode'] = ClashFindProcessMode.strict.name;
+    }
   }
 
   static Future<ReturnResultError?> saveCorePatchFinal(
