@@ -1,0 +1,223 @@
+name: Android Release
+
+# Builds the open source Android APK (arm64-v8a) and publishes it as a GitHub
+# release. The VPN service is the open bridge clashmi_vpn_service (a fork of
+# cyenxchen/clashmi-vpn-service): its mihomo core is built here with gomobile,
+# so the bridge repository does not need prebuilt binaries or its own CI.
+#
+# Required secret: ANDROID_KEYSTORE_BASE64, a base64 encoded keystore with
+# alias "clashmi" and store/key password "clashmi" (see android/key.properties).
+# Optional variables: VPN_SERVICE_REPOSITORY (default
+# <owner>/clashmi-vpn-service) and VPN_SERVICE_REF (default main).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_version:
+        description: "Optional version name x.y.z (default: version in pubspec.yaml)"
+        required: false
+        type: string
+      prerelease:
+        description: "Publish the GitHub release as prerelease"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-android-arm64:
+    name: Build Android arm64-v8a APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: clashmi
+
+    env:
+      NDK_VERSION: "28.2.13676358"
+      GOMOBILE_VERSION: "v0.0.0-20260410095206-2cfb76559b7b"
+
+    steps:
+      - name: Checkout Clash Mi
+        uses: actions/checkout@v4
+        with:
+          path: clashmi
+          fetch-depth: 0
+
+      - name: Checkout VPN bridge
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.VPN_SERVICE_REPOSITORY || format('{0}/clashmi-vpn-service', github.repository_owner) }}
+          ref: ${{ vars.VPN_SERVICE_REF || 'main' }}
+          path: clashmi-vpn-service
+          submodules: recursive
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: clashmi-vpn-service/core/mobile/go.mod
+          cache-dependency-path: clashmi-vpn-service/core/mobile/go.sum
+
+      - name: Install Android NDK
+        run: |
+          set -euo pipefail
+          yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" "ndk;${NDK_VERSION}" > /dev/null
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Build mihomo core with gomobile
+        working-directory: clashmi-vpn-service/core/mobile
+        run: |
+          set -euo pipefail
+          go install "golang.org/x/mobile/cmd/gomobile@${GOMOBILE_VERSION}"
+          gomobile init
+          go test -tags with_gvisor,cmfa ./...
+          gomobile bind \
+            -target=android/arm64 \
+            -androidapi 26 \
+            -tags with_gvisor,cmfa \
+            -javapkg=com.cyenx.clashmi.core \
+            -o ../../android/src/main/libs/clashmicore.aar \
+            .
+          cd ../..
+          mkdir -p android/libs android/src/main/jniLibs/arm64-v8a
+          unzip -p android/src/main/libs/clashmicore.aar classes.jar > android/libs/clashmicore.jar
+          unzip -p android/src/main/libs/clashmicore.aar jni/arm64-v8a/libgojni.so > android/src/main/jniLibs/arm64-v8a/libgojni.so
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.8"
+          channel: stable
+          cache: true
+
+      - name: Restore Android signing keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${ANDROID_KEYSTORE_BASE64}" ]]; then
+            echo "::error::ANDROID_KEYSTORE_BASE64 secret is required to build a signed release APK"
+            exit 1
+          fi
+          # android/key.properties: ../../private_for_build/... from android/
+          sign_dir="../private_for_build/clashmi/clashmi/android/sign"
+          mkdir -p "${sign_dir}"
+          printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "${sign_dir}/clashmi.release.keystore"
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate code
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Determine release version
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.release_version || '' }}
+          REQUESTED_PRERELEASE: ${{ github.event.inputs.prerelease || false }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          pubspec_version="$(awk '/^version:/{print $2; exit}' pubspec.yaml)"
+          pubspec_name="${pubspec_version%%+*}"
+          pubspec_build="${pubspec_version##*+}"
+          [[ "${pubspec_version}" == *+* ]] || pubspec_build=0
+
+          if [[ "${EVENT_NAME}" == "push" && "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag_name="${GITHUB_REF_NAME}"
+            build_name="${tag_name#v}"
+            build_name="${build_name%%[-+]*}"
+          else
+            build_name="${REQUESTED_VERSION#v}"
+            build_name="${build_name:-${pubspec_name}}"
+            tag_name="v${build_name}-oss.${RUN_NUMBER}"
+          fi
+          if ! [[ "${build_name}" =~ ^[0-9]+[.][0-9]+[.][0-9]+$ ]]; then
+            echo "::error::Build name must be x.y.z, got ${build_name}"
+            exit 1
+          fi
+          # Increases with every upstream build number and every run, so a new
+          # APK always installs over the previous one.
+          build_number="$(( pubspec_build * 1000 + RUN_NUMBER % 1000 ))"
+
+          echo "tag_name=${tag_name}" >> "${GITHUB_OUTPUT}"
+          echo "build_name=${build_name}" >> "${GITHUB_OUTPUT}"
+          echo "build_number=${build_number}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${REQUESTED_PRERELEASE}" >> "${GITHUB_OUTPUT}"
+          echo "target_sha=$(git rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+          echo "bridge_sha=$(git -C ../clashmi-vpn-service rev-parse HEAD)" >> "${GITHUB_OUTPUT}"
+          echo "Release ${tag_name}: build-name=${build_name}, build-number=${build_number}"
+
+      - name: Build release APK
+        run: |
+          flutter build apk \
+            --release \
+            --target-platform android-arm64 \
+            --build-name "${{ steps.version.outputs.build_name }}" \
+            --build-number "${{ steps.version.outputs.build_number }}"
+
+      - name: Prepare release asset
+        id: asset
+        run: |
+          set -euo pipefail
+          asset_name="clashmi-oss_${{ steps.version.outputs.tag_name }}_android_arm64-v8a.apk"
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk "dist/${asset_name}"
+          (cd dist && sha256sum "${asset_name}" > "${asset_name}.sha256")
+          echo "asset_path=clashmi/dist/${asset_name}" >> "${GITHUB_OUTPUT}"
+          echo "sha256_path=clashmi/dist/${asset_name}.sha256" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish GitHub release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.version.outputs.tag_name }}
+          TARGET_SHA: ${{ steps.version.outputs.target_sha }}
+          BRIDGE_SHA: ${{ steps.version.outputs.bridge_sha }}
+          BRIDGE_REPOSITORY: ${{ vars.VPN_SERVICE_REPOSITORY || format('{0}/clashmi-vpn-service', github.repository_owner) }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          ASSET_PATH: ${{ steps.asset.outputs.asset_path }}
+          SHA256_PATH: ${{ steps.asset.outputs.sha256_path }}
+        run: |
+          set -euo pipefail
+          notes="Open source Android arm64-v8a build (package com.nebula.clashmi.oss, installs next to the official Clash Mi).
+
+          Source: ${GITHUB_REPOSITORY}@${TARGET_SHA}
+          VPN bridge: ${BRIDGE_REPOSITORY}@${BRIDGE_SHA}"
+
+          if gh release view "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            gh release edit "${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --notes "${notes}"
+          else
+            args=("${TAG_NAME}" --repo "${GITHUB_REPOSITORY}" --target "${TARGET_SHA}" --title "${TAG_NAME}" --notes "${notes}")
+            if [[ "${PRERELEASE}" == "true" ]]; then
+              args+=(--prerelease)
+            else
+              args+=(--latest)
+            fi
+            gh release create "${args[@]}"
+          fi
+          gh release upload "${TAG_NAME}" "${ASSET_PATH}" "${SHA256_PATH}" --repo "${GITHUB_REPOSITORY}" --clobber

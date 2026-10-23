@@ -32,6 +32,10 @@ abstract final class AppUtils {
   }
 
   static String getId() {
+    if (Platform.isAndroid) {
+      // Must match applicationId in android/app/build.gradle.kts.
+      return "com.nebula.clashmi.oss";
+    }
     return "com.nebula.clashmi";
   }
 

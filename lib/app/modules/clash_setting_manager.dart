@@ -18,7 +18,8 @@ import 'package:clashmi/app/utils/path_utils.dart';
 import 'package:clashmi/i18n/strings.g.dart';
 import 'package:flutter/services.dart';
 
-import 'package:libclash_vpn_service/proxy_manager.dart';
+import 'package:clashmi_vpn_service/proxy_manager.dart';
+import 'package:clashmi_vpn_service/vpn_service.dart';
 import 'package:path/path.dart' as path;
 
 class ClashSettingManager {
@@ -28,6 +29,7 @@ class ClashSettingManager {
   static const dnsHijack = "0.0.0.0:53";
   static RawConfig _setting = defaultConfig();
   static final FileSaver _fileSaver = FileSaver();
+  static int _androidSdkInt = 0;
 
   static Future<void> init() async {
     ClashHttpApi.getControlPort = () {
@@ -37,6 +39,10 @@ class ClashSettingManager {
       return _setting.Secret ?? "";
     };
     _fileSaver.setSavePath(await PathUtils.serviceCoreSettingFilePath());
+    if (Platform.isAndroid) {
+      _androidSdkInt =
+          int.tryParse(await FlutterVpnService.getSystemVersion()) ?? 0;
+    }
     await load();
     await initGeo();
   }
@@ -548,9 +554,10 @@ class ClashSettingManager {
   // Android routing does not prevent that, so reject TUN connections whose
   // owner is not allowed by the per-app settings. The owner lookup returns
   // nothing for apps the VPN does not apply to, so an unknown owner is
-  // rejected as well.
+  // rejected as well. The owner lookup needs Android 10 (API 29): on older
+  // versions every owner would be unknown and all traffic rejected.
   static List<String> _perAppLeakGuardRules() {
-    if (!Platform.isAndroid) {
+    if (!Platform.isAndroid || _androidSdkInt < 29) {
       return [];
     }
     final perApp = _setting.Extension?.Tun.perApp;
@@ -564,15 +571,20 @@ class ClashSettingManager {
     if (packageIds.isEmpty) {
       return [];
     }
-    final matchers = packageIds.map((id) => "(PROCESS-NAME,$id)").toList();
-    final anyPackage = matchers.length == 1
-        ? matchers.first
-        : "(OR,(${matchers.join(",")}))";
+    String anyPackage(List<String> ids) {
+      final matchers = ids.map((id) => "(PROCESS-NAME,$id)").toList();
+      return matchers.length == 1
+          ? matchers.first
+          : "(OR,(${matchers.join(",")}))";
+    }
+
     if (perApp.WhiteList == true) {
-      return ["AND,((IN-TYPE,TUN),(NOT,($anyPackage))),REJECT"];
+      // The VPN service keeps the app itself inside the VPN route.
+      final allowed = anyPackage([...packageIds, AppUtils.getId()]);
+      return ["AND,((IN-TYPE,TUN),(NOT,($allowed))),REJECT"];
     }
     return [
-      "AND,((IN-TYPE,TUN),$anyPackage),REJECT",
+      "AND,((IN-TYPE,TUN),${anyPackage(packageIds)}),REJECT",
       "AND,((IN-TYPE,TUN),(NOT,((PROCESS-NAME-REGEX,.+)))),REJECT",
     ];
   }

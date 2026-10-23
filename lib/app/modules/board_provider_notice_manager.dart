@@ -17,7 +17,7 @@ import 'package:clashmi/app/utils/log.dart';
 import 'package:clashmi/app/utils/notice_utils.dart';
 import 'package:clashmi/app/utils/path_utils.dart';
 import 'package:clashmi/app/utils/platform_utils.dart';
-import 'package:libclash_vpn_service/state.dart';
+import 'package:clashmi_vpn_service/state.dart';
 
 class BoardProviderNoticeItem {
   String providerId = "";

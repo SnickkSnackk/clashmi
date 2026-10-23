@@ -1,22 +1,37 @@
 package com.nebula.clashmi
 
-import android.app.ActivityManager
 import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
+import android.net.VpnService
 import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
+import android.util.Log
 import androidx.annotation.RequiresApi
+import com.cyenx.clashmi.clashmi_vpn_service.ClashmiVpnStatus
+import com.cyenx.clashmi.clashmi_vpn_service.RotatingLogWriter
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import org.json.JSONObject
 
 @RequiresApi(24)
 class TileService : TileService() {
     companion object {
-        const val profile_file_name = "vpn_profile.txt"
-        const val service_file_name = "service.json"
+        private const val TAG = "ClashMiTileService"
+        private const val SERVICE_FILE_NAME = "service.json"
+        private const val SERVICE_CLASS_NAME =
+                "com.cyenx.clashmi.clashmi_vpn_service.ClashMiVpnService"
+        private const val ACTION_START = "com.cyenx.clashmi.clashmi_vpn_service.START"
+        private const val ACTION_STOP = "com.cyenx.clashmi.clashmi_vpn_service.STOP"
+        private const val ACTION_STATE_CHANGED =
+                "com.cyenx.clashmi.clashmi_vpn_service.STATE_CHANGED"
+        private const val EXTRA_STATE = "state"
     }
 
     private var receiverRegistered = false
@@ -27,12 +42,16 @@ class TileService : TileService() {
                         intent: Intent,
                 ) {
                     when (intent.action) {
-                        io.nebula.vpn_service.ClashVpnServiceImpl.ACTION_START_RESULT -> {
-                            val err = intent.getStringExtra("err")
-                            updateTile(err == "")
-                        }
-                        io.nebula.vpn_service.ClashVpnServiceImpl.ACTION_STOPED -> {
-                            updateTile(false)
+                        ACTION_STATE_CHANGED -> {
+                            val state = intent.getStringExtra(EXTRA_STATE)
+                            writeLog("stateChanged state=$state")
+                            when (state) {
+                                "connected" -> updateTile(true)
+                                "disconnected" -> updateTile(false)
+                                "connecting",
+                                "disconnecting" -> updateTile(null)
+                                else -> update()
+                            }
                         }
                     }
                 }
@@ -41,13 +60,10 @@ class TileService : TileService() {
     override fun onCreate() {
         if (!receiverRegistered) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                var intentFilter = IntentFilter()
-                intentFilter.addAction(io.nebula.vpn_service.ClashVpnServiceImpl.ACTION_STOPED)
-                intentFilter.addAction(
-                        io.nebula.vpn_service.ClashVpnServiceImpl.ACTION_START_RESULT
-                )
+                val intentFilter = IntentFilter()
+                intentFilter.addAction(ACTION_STATE_CHANGED)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(receiver, intentFilter, Context.RECEIVER_EXPORTED)
+                    registerReceiver(receiver, intentFilter, Context.RECEIVER_NOT_EXPORTED)
                 } else {
                     registerReceiver(receiver, intentFilter)
                 }
@@ -66,28 +82,25 @@ class TileService : TileService() {
     }
 
     override fun onClick() {
-        if (isRuning()) {
-            var intent =
-                    Intent().apply {
-                        action = io.nebula.vpn_service.ClashVpnServiceImpl.ACTION_STOP
-                    }
-            intent.setClassName(
-                    getPackageName(),
-                    io.nebula.vpn_service.ClashVpnServiceImpl::class.java.name
-            )
-            intent.putExtra("exitProcess", true)
-            startService(intent)
-            // stopService(intent)
-            updateTile(false)
-            return
-        }
-
-        try {
-            updateTile(true)
-            startByService()
-        } catch (e: Exception) {
-            var stackTrace = e.getStackTrace().joinToString(separator = "\n")
-            writeLog("TileService onClick: exception: $e \n$stackTrace")
+        val state = ClashmiVpnStatus.currentState()
+        writeLog("onClick state=$state validConfig=${isValid()}")
+        when (state) {
+            "connected",
+            "connecting" -> {
+                requestStop()
+                // Keep the tile busy until the service broadcasts that native
+                // cleanup and TUN release have actually finished.
+                updateTile(null)
+            }
+            "disconnecting" -> {
+                writeLog("onClick ignored while native stop is still running")
+                updateTile(null)
+            }
+            "disconnected" -> requestStart()
+            else -> {
+                writeLog("onClick ignored unknownState=$state")
+                update()
+            }
         }
     }
 
@@ -110,16 +123,20 @@ class TileService : TileService() {
     }
 
     private fun isValid(): Boolean {
-        return profileFile().exists() && serviceFile().exists()
+        return serviceFile().exists()
     }
 
     private fun update() {
-        if (isRuning()) {
-            updateTile(true)
-            return
+        val state = ClashmiVpnStatus.currentState()
+        val active = when (state) {
+            "connected" -> true
+            "disconnected" -> if (isValid()) false else null
+            "connecting",
+            "disconnecting" -> null
+            else -> null
         }
-        val valid = if (isValid()) false else null
-        updateTile(valid)
+        writeLog("update state=$state validConfig=${isValid()} active=$active")
+        updateTile(active)
     }
 
     private fun updateTile(active: Boolean?) {
@@ -130,17 +147,14 @@ class TileService : TileService() {
                         false -> Tile.STATE_INACTIVE
                         else -> Tile.STATE_UNAVAILABLE
                     }
+            writeLog("updateTile state=$state")
             updateTile()
         }
     }
 
     private fun startByService() {
-        var intent =
-                Intent().apply { action = io.nebula.vpn_service.ClashVpnServiceImpl.ACTION_START }
-        intent.setClassName(
-                getPackageName(),
-                io.nebula.vpn_service.ClashVpnServiceImpl::class.java.name
-        )
+        val intent = Intent().apply { action = ACTION_START }
+        intent.setClassName(getPackageName(), SERVICE_CLASS_NAME)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(intent)
         } else {
@@ -149,75 +163,94 @@ class TileService : TileService() {
     }
 
     private fun startByLaunch() {
-        var intent = Intent()
-        intent.setClassName(getPackageName(), MainActivity::class.java.name)
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        intent.putExtra("command", "connect")
+        // The app's existing scheme handler performs the normal profile and VPN
+        // permission flow; the old "command" extra was never consumed.
+        val intent = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("clashmi://connect?background=true"),
+        ).apply {
+            setPackage(packageName)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
         if (Build.VERSION.SDK_INT < 34) {
             startActivityAndCollapse(intent)
         } else {
             startActivityAndCollapse(
-                    PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+                    PendingIntent.getActivity(
+                            this,
+                            0,
+                            intent,
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                    )
             )
         }
     }
 
-    private fun startBy() {
-        if (!isMainProcessRunning()) {
-            startByLaunch()
-        } else {
-            startByService()
+    private fun requestStart() {
+        if (!isValid()) {
+            writeLog("start ignored: service config is missing")
+            updateTile(null)
+            return
         }
-    }
-
-    private fun isMainRuning(): Boolean = isServiceRuning(MainActivity::class.java.name)
-
-    private fun isRuning(): Boolean =
-            isServiceRuning(io.nebula.vpn_service.ClashVpnServiceImpl::class.java.name)
-
-    private fun isServiceRuning(serviceName: String): Boolean {
         try {
-            val packageName = getPackageName()
-            val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-            val services = activityManager.getRunningServices(Integer.MAX_VALUE)
-            for (runningServiceInfo in services) {
-                if (runningServiceInfo.service.getPackageName().equals(packageName)) {
-                    if (runningServiceInfo.service.getClassName().equals(serviceName)) {
-                        return runningServiceInfo.started
-                    }
-                }
+            if (VpnService.prepare(this) != null) {
+                writeLog("start requires VPN permission; launching app flow")
+                updateTile(null)
+                startByLaunch()
+                return
             }
-        } catch (e: Exception) {
-            var stackTrace = e.getStackTrace().joinToString(separator = "\n")
-            writeLog("TileService isServiceRuning: exception: $e \n$stackTrace")
+            writeLog("start service intent")
+            updateTile(null)
+            startByService()
+        } catch (error: Throwable) {
+            writeLog("start failed: ${error.message}\n${Log.getStackTraceString(error)}")
+            update()
         }
-
-        return false
     }
 
-    fun isMainProcessRunning(): Boolean {
-        val packageName = getPackageName()
-        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val runningApps = activityManager.runningAppProcesses ?: return false
-        for (procInfo in runningApps) {
-            if (procInfo.processName == packageName) {
-                return true
-            }
+    private fun requestStop() {
+        try {
+            val intent = Intent().apply { action = ACTION_STOP }
+            intent.setClassName(getPackageName(), SERVICE_CLASS_NAME)
+            writeLog("stop service intent")
+            startService(intent)
+        } catch (error: Throwable) {
+            writeLog("stop failed: ${error.message}\n${Log.getStackTraceString(error)}")
+            update()
         }
-        return false
     }
 
     private fun serviceFile(): File {
         val context = this as Context
-        return File(context.getFilesDir(), service_file_name)
-    }
-
-    private fun profileFile(): File {
-        val context = this as Context
-        return File(context.getFilesDir(), profile_file_name)
+        return File(context.getFilesDir(), SERVICE_FILE_NAME)
     }
 
     private fun writeLog(message: String) {
-        print("TileService writeLog: $message\n")
+        Log.i(TAG, message)
+        // Persist tile evidence beside the core lifecycle log. Logcat commonly
+        // rolls over before an intermittent quick-settings failure is reported.
+        runCatching {
+            val configFile = serviceFile()
+            if (!configFile.exists()) {
+                return@runCatching
+            }
+            val logPath = JSONObject(configFile.readText()).optString("log_path")
+            if (logPath.isEmpty()) {
+                return@runCatching
+            }
+            val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US).format(Date())
+            val rotated = RotatingLogWriter.append(
+                    File(logPath),
+                    "$timestamp [I] [ClashMiTileService] $message\n",
+            )
+            if (rotated) {
+                Log.i(
+                        TAG,
+                        "persistent log rotated path=$logPath maxBytes=${RotatingLogWriter.MAX_FILE_BYTES} maxFiles=${RotatingLogWriter.MAX_FILE_COUNT}",
+                )
+            }
+        }.onFailure {
+            Log.w(TAG, "append tile log failed: ${it.message}")
+        }
     }
 }

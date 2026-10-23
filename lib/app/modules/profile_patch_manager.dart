@@ -17,7 +17,7 @@ import 'package:clashmi/app/utils/path_utils.dart';
 import 'package:clashmi/app/utils/platform_utils.dart';
 import 'package:clashmi/i18n/strings.g.dart';
 import 'package:flutter/widgets.dart';
-import 'package:libclash_vpn_service/state.dart';
+import 'package:clashmi_vpn_service/state.dart';
 import 'package:path/path.dart' as path;
 import 'package:flutter_js/flutter_js.dart';
 import 'package:clashmi/app/utils/emoji_utils.dart';

@@ -39,8 +39,8 @@ import 'package:clashmi/screens/webview_helper.dart';
 import 'package:clashmi/screens/widgets/segmented_elevated_button.dart';
 import 'package:fast_cached_network_image/fast_cached_network_image.dart';
 import 'package:flutter/material.dart';
-import 'package:libclash_vpn_service/state.dart';
-import 'package:libclash_vpn_service/vpn_service.dart';
+import 'package:clashmi_vpn_service/state.dart';
+import 'package:clashmi_vpn_service/vpn_service.dart';
 import 'package:quick_actions/quick_actions.dart';
 import 'package:tuple/tuple.dart';
 

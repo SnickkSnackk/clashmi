@@ -21,7 +21,7 @@ if (project.hasProperty("dart-defines")) {
 
 android {
     namespace = "com.nebula.clashmi"
-    compileSdkVersion = "android-35"
+    compileSdkVersion = "android-36"
     buildToolsVersion = "36.0.0"
     ndkVersion = "28.2.13676358" // flutter.ndkVersion
 
@@ -34,7 +34,9 @@ android {
     kotlinOptions { jvmTarget = JavaVersion.VERSION_17.toString() }
 
     defaultConfig {
-        applicationId = "com.nebula.clashmi"
+        // A separate id lets this open source build be installed next to the
+        // official Clash Mi, which is signed with a different key.
+        applicationId = "com.nebula.clashmi.oss"
         minSdk = 26
         targetSdk = 35
         versionCode = flutter.versionCode
@@ -44,7 +46,8 @@ android {
     buildTypes {
         val keystore = rootProject.file("./key.properties")
         val prop = Properties().apply { keystore.inputStream().use(this::load) }
-        named("debug") { ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64", "x86") } }
+        // The open VPN bridge (clashmi_vpn_service) ships the core for arm64 only.
+        named("debug") { ndk { abiFilters += listOf("arm64-v8a") } }
         named("profile") {
             signingConfig =
                     signingConfigs.create("profile") {
@@ -53,7 +56,7 @@ android {
                         keyAlias = prop.getProperty("keyAlias.release")
                         keyPassword = prop.getProperty("keyPassword.release")
                     }
-            ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64", "x86") }
+            ndk { abiFilters += listOf("arm64-v8a") }
         }
         named("release") {
             signingConfig =
@@ -65,17 +68,15 @@ android {
                     }
             ndk {
                 abiFilters.clear()
-                abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+                abiFilters += listOf("arm64-v8a")
                 // debugSymbolLevel = 'FULL'
             }
         }
     }
     splits {
         abi {
-            isEnable = true
-            isUniversalApk = true
-            reset()
-            include("armeabi-v7a", "arm64-v8a")
+            isEnable = false
+            isUniversalApk = false
         }
     }
 }
@@ -84,6 +85,8 @@ androidComponents {
     onVariants { variant ->
         if (variant.buildType == "release") {
             variant.packaging.jniLibs.excludes.add("**/x86_64/**")
+            variant.packaging.jniLibs.excludes.add("**/x86/**")
+            variant.packaging.jniLibs.excludes.add("**/armeabi-v7a/**")
         }
     }
 }

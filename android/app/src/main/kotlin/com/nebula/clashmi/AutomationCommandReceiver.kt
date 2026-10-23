@@ -7,9 +7,14 @@ import android.os.Build
 
 class AutomationCommandReceiver : BroadcastReceiver() {
     companion object {
-        const val ACTION_CONNECT = "com.nebula.clashmi.action.CONNECT"
-        const val ACTION_DISCONNECT = "com.nebula.clashmi.action.DISCONNECT"
-        const val ACTION_RECONNECT = "com.nebula.clashmi.action.RECONNECT"
+        const val ACTION_CONNECT = "com.nebula.clashmi.oss.action.CONNECT"
+        const val ACTION_DISCONNECT = "com.nebula.clashmi.oss.action.DISCONNECT"
+        const val ACTION_RECONNECT = "com.nebula.clashmi.oss.action.RECONNECT"
+
+        private const val SERVICE_CLASS_NAME =
+                "com.cyenx.clashmi.clashmi_vpn_service.ClashMiVpnService"
+        private const val SERVICE_ACTION_START = "com.cyenx.clashmi.clashmi_vpn_service.START"
+        private const val SERVICE_ACTION_STOP = "com.cyenx.clashmi.clashmi_vpn_service.STOP"
     }
 
     override fun onReceive(context: Context, intent: Intent?) {
@@ -23,7 +28,7 @@ class AutomationCommandReceiver : BroadcastReceiver() {
 
     private fun connect(context: Context) {
         val serviceIntent = createServiceIntent(context)
-        serviceIntent.action = io.nebula.vpn_service.ClashVpnServiceImpl.ACTION_START
+        serviceIntent.action = SERVICE_ACTION_START
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent)
         } else {
@@ -33,7 +38,7 @@ class AutomationCommandReceiver : BroadcastReceiver() {
 
     private fun disconnect(context: Context) {
         val serviceIntent = createServiceIntent(context)
-        serviceIntent.action = io.nebula.vpn_service.ClashVpnServiceImpl.ACTION_STOP
+        serviceIntent.action = SERVICE_ACTION_STOP
         context.startService(serviceIntent)
     }
 
@@ -44,10 +49,7 @@ class AutomationCommandReceiver : BroadcastReceiver() {
 
     private fun createServiceIntent(context: Context): Intent {
         val serviceIntent = Intent()
-        serviceIntent.setClassName(
-                context.packageName,
-                io.nebula.vpn_service.ClashVpnServiceImpl::class.java.name
-        )
+        serviceIntent.setClassName(context.packageName, SERVICE_CLASS_NAME)
         serviceIntent.putExtra("actionBy", "automation")
         serviceIntent.putExtra("source", "broadcast")
         return serviceIntent

@@ -1,0 +1,7 @@
+name: board_service
+description: Stub of the closed board_service package for open source builds. Panel login (v2board, xboard, SSPanel) is not available.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ">=3.0.0 <4.0.0"
