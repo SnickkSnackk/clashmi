@@ -27,6 +27,15 @@ class ClashSettingManager {
   static const iNet4Address = "172.19.0.1/30";
   static const iNet6Address = "fdfe:dcbe:9876::1/126";
   static const dnsHijack = "0.0.0.0:53";
+  // The open source Android build is installed next to the official Clash Mi,
+  // so it must not take the official app's default ports: a port held by the
+  // other app leaves the controller unreachable and the proxy list empty.
+  static const _officialMixedPort = 7890;
+  static const _officialExternalController = "127.0.0.1:9090";
+  static int get defaultMixedPort =>
+      Platform.isAndroid ? 17890 : _officialMixedPort;
+  static String get defaultExternalController =>
+      Platform.isAndroid ? "127.0.0.1:19090" : _officialExternalController;
   static RawConfig _setting = defaultConfig();
   static final FileSaver _fileSaver = FileSaver();
   static int _androidSdkInt = 0;
@@ -369,9 +378,9 @@ class ClashSettingManager {
   static RawConfig defaultConfig() {
     return RawConfig.by(
       Mode: ClashConfigsMode.rule.name,
-      MixedPort: 7890,
+      MixedPort: defaultMixedPort,
       LogLevel: ClashLogLevel.error.name,
-      ExternalController: "127.0.0.1:9090",
+      ExternalController: defaultExternalController,
       IPv6: false,
       DNS: defaultDNS(),
       NTP: defaultNTP(),
@@ -659,7 +668,16 @@ class ClashSettingManager {
       return;
     }
     _setting = setting;
-    _setting.MixedPort ??= 7890;
+    if (Platform.isAndroid) {
+      // Settings saved by earlier builds use the official app's ports.
+      if (_setting.MixedPort == _officialMixedPort) {
+        _setting.MixedPort = defaultMixedPort;
+      }
+      if (_setting.ExternalController == _officialExternalController) {
+        _setting.ExternalController = defaultExternalController;
+      }
+    }
+    _setting.MixedPort ??= defaultMixedPort;
     _setting.DNS ??= defaultDNS();
     _setting.NTP ??= defaultNTP();
     _setting.Tun ??= defaultTun();
@@ -743,6 +761,6 @@ class ClashSettingManager {
   }
 
   static int getMixedPort() {
-    return _setting.MixedPort ?? 7890;
+    return _setting.MixedPort ?? defaultMixedPort;
   }
 }

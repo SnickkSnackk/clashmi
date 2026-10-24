@@ -211,6 +211,10 @@ class SettingConfigItemWebDev {
 class SettingConfig {
   static const String kDefaultBoardUrl = "https://board.zash.run.place/";
   static const int kDefaultBoardPort = 7066;
+  // Differs on Android so the open source build does not share the board
+  // port with the official Clash Mi installed next to it.
+  static int get defaultBoardPort =>
+      Platform.isAndroid ? 17066 : kDefaultBoardPort;
   static const String kDefaultDelayTestUrl =
       "https://www.gstatic.com/generate_204";
   String languageTag = "";
@@ -230,7 +234,7 @@ class SettingConfig {
   String _userAgent = "";
   bool boardOnline = false;
   String boardUrl = kDefaultBoardUrl;
-  int boardLocalPort = kDefaultBoardPort;
+  int boardLocalPort = defaultBoardPort;
   String delayTestUrl = kDefaultDelayTestUrl;
   int delayTestTimeout = 5000;
   bool hideDockIcon = false; //macos
@@ -296,7 +300,10 @@ class SettingConfig {
 
     boardOnline = map["board_online"] ?? false;
     boardUrl = map["board_url"] ?? kDefaultBoardUrl;
-    boardLocalPort = map["board_port"] ?? kDefaultBoardPort;
+    boardLocalPort = map["board_port"] ?? defaultBoardPort;
+    if (Platform.isAndroid && boardLocalPort == kDefaultBoardPort) {
+      boardLocalPort = defaultBoardPort;
+    }
     delayTestUrl = map["delay_test_url"] ?? kDefaultDelayTestUrl;
     delayTestTimeout = map["delay_test_url_timeout"] ?? 5000;
     hideDockIcon = map["hide_dock_icon"] ?? false;

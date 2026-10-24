@@ -1313,7 +1313,7 @@ class GroupHelper {
               inputFormatters: [FilteringTextInputFormatter.digitsOnly],
               onChanged: (String value) {
                 setting.boardLocalPort =
-                    int.tryParse(value) ?? SettingConfig.kDefaultBoardPort;
+                    int.tryParse(value) ?? SettingConfig.defaultBoardPort;
               },
             ),
           ),
