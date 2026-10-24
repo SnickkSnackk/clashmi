@@ -24,6 +24,13 @@ abstract final class AppUtils {
   }
 
   static String getBuildinVersion() {
+    // CI builds pass the APK version, which must match the package version
+    // checked at launch.
+    const versionName = String.fromEnvironment('APP_VERSION_NAME');
+    const versionCode = String.fromEnvironment('APP_VERSION_CODE');
+    if (versionName.isNotEmpty && versionCode.isNotEmpty) {
+      return "$versionName.$versionCode";
+    }
     return "1.0.32.1800";
   }
 
