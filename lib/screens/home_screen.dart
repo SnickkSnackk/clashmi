@@ -312,7 +312,7 @@ class _HomeScreenState extends LasyRenderingState<HomeScreen>
                       mainAxisAlignment: MainAxisAlignment.start,
                       children: [
                         Text(
-                          AppUtils.getName(),
+                          AppUtils.getDisplayName(),
                           style: const TextStyle(
                             fontWeight: ThemeConfig.kFontWeightTitle,
                             fontSize: ThemeConfig.kFontSizeTitle,

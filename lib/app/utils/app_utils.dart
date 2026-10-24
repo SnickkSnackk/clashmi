@@ -13,6 +13,16 @@ abstract final class AppUtils {
     return "Clash Mi";
   }
 
+  // The name shown to the user. The Android open source build is installed
+  // next to the official app, so it is named apart from it; getName() stays
+  // the technical name (tun device, backup files, URLs).
+  static String getDisplayName() {
+    if (Platform.isAndroid) {
+      return "Clash Mi OSS";
+    }
+    return getName();
+  }
+
   static String getReleaseVersion() {
     List<String> v = getBuildinVersion().split(".");
     return "${v[0]}.${v[1]}.${v[2]}+${v[3]}";

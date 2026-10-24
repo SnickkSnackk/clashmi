@@ -116,7 +116,7 @@ class AboutScreenState extends LasyRenderingState<AboutScreen> {
       GroupItemOptions(
         textOptions: GroupItemTextOptions(
           name: tcontext.meta.name,
-          text: AppUtils.getName(),
+          text: AppUtils.getDisplayName(),
         ),
       ),
       GroupItemOptions(

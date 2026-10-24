@@ -180,7 +180,7 @@ class VPNService {
     var excludePorts = [controlPort];
     excludePorts.add(ClashSettingManager.getMixedPort());
 
-    String name = AppUtils.getName();
+    String name = AppUtils.getDisplayName();
     String vpnName = name;
     String configFilePath = await PathUtils.serviceConfigFilePath();
     String installReferrer = await InstallReferrerUtils.getString();

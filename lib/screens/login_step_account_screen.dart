@@ -85,7 +85,10 @@ class _LoginScreenState extends State<LoginStepAccountScreen> {
       child: Scaffold(
         appBar: PreferredSize(
           preferredSize: Size.zero,
-          child: AppBar(title: Text(AppUtils.getName()), centerTitle: true),
+          child: AppBar(
+            title: Text(AppUtils.getDisplayName()),
+            centerTitle: true,
+          ),
         ),
         body: SafeArea(
           child: Padding(
